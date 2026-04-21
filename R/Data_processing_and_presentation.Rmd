@@ -1,0 +1,618 @@
+---
+title: "Vein Paper Data Processing"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+---
+```{r include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load required libraries.
+```{r Loading Packages & Setting Colors, warning=FALSE, message=FALSE}
+# Load libraries
+library(readxl)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+library(gridExtra)
+library(paletteer)
+library(ggpubr)
+library(cowplot)
+library(patchwork)
+library(png)
+library(grid)
+library(magick)
+library(ggiraph)
+library(ggprism)
+
+# Set color palette 
+orange1 = paletteer::paletteer_d("NatParksPalettes::Cuyahoga")[2]
+orange2 = paletteer::paletteer_d("NatParksPalettes::Cuyahoga")[1]
+green1 = paletteer::paletteer_d("NatParksPalettes::IguazuFalls")[2]
+green2 = paletteer::paletteer_d("NatParksPalettes::IguazuFalls")[1]
+red2 = paletteer::paletteer_d("nationalparkcolors::ArcticGates")[6]
+red1 = paletteer::paletteer_d("nationalparkcolors::Saguaro")[2]
+blue1 = paletteer::paletteer_d("nationalparkcolors::CraterLake")[1]
+blue2 = paletteer::paletteer_d("nationalparkcolors::CraterLake")[5]
+lakota1 = paletteer::paletteer_d("MetBrewer::Lakota")[1]
+lakota2 = paletteer::paletteer_d("MetBrewer::Lakota")[2]
+lakota3 = paletteer::paletteer_d("MetBrewer::Lakota")[3]
+my_colors = c(orange1, orange2, green1, green2, red1, red2, blue1, blue2, lakota1, lakota2, lakota3)
+
+# Predefined color indices for the models
+model_colors <- c(
+    "P93 3mo" = 1,
+    "P93 12mo" = 2,
+    "P96 3mo" = 3,
+    "P96 12mo" = 4,
+    "P98 3mo" = 5,
+    "P98 12mo" = 6,
+    "P104 3mo" = 7,
+    "P104 12mo" = 8,
+    "3mm" = 9, 
+    "6mm" = 10,
+    "9mm" = 11
+)
+```
+
+Define custom functions (not shown in knitted version). These functions take in the following inputs: 
+
+- 'ModelName' is used to attach an identifier to the dataset being processed, (e.g. '"3mm"'). This is a convenient way to change the name that will ultimately appear in figure legends.
+
+- 'ModelData' takes in a dataframe from a *single* model, usually subset from a larger dataframe.
+
+- 'include_errorbar' takes a TRUE/FALSE logical argument. TRUE will include error bars, FALSE will exclude them.
+
+- 'vertical' likewise takes a TRUE/FALSE logical argument. TRUE will stack the plots vertically, while FALSE will arrange the plots in a single row.
+
+- '...' is where the single model datasets are input. This allows you to plot as many or as few models on a single graph as you wish.
+```{R Custom Functions for Data Processing and Presentation, echo=FALSE }
+# Define function to calculate mean streamline angle and relevant WSS values
+# Written to process single model data that has been subsetted from the larger dataset
+calculate_model_stats <- function(ModelName, ModelData) {
+  library(dplyr)
+  
+  FlowRates <- unique(ModelData$FlowRate)
+  
+  # DataFrame to store results
+  DataFrame <- data.frame(
+    'Flow Rate' = FlowRates,
+    'Global Average WSS' = numeric(length(FlowRates)), 
+    'Global Average WSS Std' = numeric(length(FlowRates)),
+    'Prebend Average WSS' = numeric(length(FlowRates)),
+    'Prebend Average WSS Std' = numeric(length(FlowRates)),
+    'Prebend Inner WSS' = numeric(length(FlowRates)),
+    'Prebend Inner WSS Std' = numeric(length(FlowRates)),
+    'Prebend Outer WSS' = numeric(length(FlowRates)),
+    'Prebend Outer WSS Std' = numeric(length(FlowRates)),
+    'Bend Average WSS' = numeric(length(FlowRates)),
+    'Bend Average WSS Std' = numeric(length(FlowRates)),
+    'Bend Inner WSS' = numeric(length(FlowRates)),
+    'Bend Inner WSS Std' = numeric(length(FlowRates)),
+    'Bend Outer WSS' = numeric(length(FlowRates)),
+    'Bend Outer WSS Std' = numeric(length(FlowRates)),
+    'Postbend Average WSS' = numeric(length(FlowRates)), 
+    'Postbend Average WSS Std' = numeric(length(FlowRates)), 
+    'Postbend Inner WSS' = numeric(length(FlowRates)),
+    'Postbend Inner WSS Std' = numeric(length(FlowRates)),
+    'Postbend Outer WSS' = numeric(length(FlowRates)),
+    'Postbend Outer WSS Std' = numeric(length(FlowRates)),
+    'Prebend Angle' = numeric(length(FlowRates)),
+    'Prebend Angle Std' = numeric(length(FlowRates)),
+    'Bend Angle' = numeric(length(FlowRates)),
+    'Bend Angle Std' = numeric(length(FlowRates)),
+    'Postbend Angle' = numeric(length(FlowRates)),
+    'Postbend Angle Std' = numeric(length(FlowRates))
+  )
+  
+  for (i in seq_along(FlowRates)) {
+    flow_rate <- FlowRates[i]
+    
+    # Subset data by region and flow rate
+    global.subset <- filter(ModelData, FlowRate == flow_rate)
+    prebend.subset <- filter(ModelData, Region == "Prebend" & FlowRate == flow_rate)
+    prebend.inner <- filter(ModelData, Region == "Prebend" & Wall == "Inner" & FlowRate == flow_rate)
+    prebend.outer <- filter(ModelData, Region == "Prebend" & Wall == "Outer" & FlowRate == flow_rate)
+    bend.subset <- filter(ModelData, Region == "Bend" & FlowRate == flow_rate)
+    bend.inner <- filter(ModelData, Region == "Bend" & Wall == "Inner" & FlowRate == flow_rate)
+    bend.outer <- filter(ModelData, Region == "Bend" & Wall == "Outer" & FlowRate == flow_rate)
+    postbend.subset <- filter(ModelData, Region == "Postbend" & FlowRate == flow_rate)
+    postbend.inner <- filter(ModelData, Region == "Postbend" & Wall == "Inner" & FlowRate == flow_rate)
+    postbend.outer <- filter(ModelData, Region == "Postbend" & Wall == "Outer" & FlowRate == flow_rate)
+    
+    # WSS Calculations
+    global.wss <- mean(global.subset$WSS_mean, na.rm = TRUE)
+    global.wss.std <- sqrt(mean(global.subset$WSS_var, na.rm = TRUE))
+    
+    prebend.wss <- mean(prebend.subset$WSS_mean, na.rm = TRUE)
+    prebend.wss.std <- sqrt(mean(prebend.subset$WSS_var, na.rm = TRUE))
+    prebend.inner.wss <- mean(prebend.inner$WSS_mean, na.rm = TRUE)
+    prebend.inner.wss.std <- sqrt(mean(prebend.inner$WSS_var, na.rm = TRUE))
+    prebend.outer.wss <- mean(prebend.outer$WSS_mean, na.rm = TRUE)
+    prebend.outer.wss.std <- sqrt(mean(prebend.outer$WSS_var, na.rm = TRUE))
+    
+    bend.wss <- mean(bend.subset$WSS_mean, na.rm = TRUE)
+    bend.wss.std <- sqrt(mean(bend.subset$WSS_var, na.rm = TRUE))
+    bend.inner.wss <- mean(bend.inner$WSS_mean, na.rm = TRUE)
+    bend.inner.wss.std <- sqrt(mean(bend.inner$WSS_var, na.rm = TRUE))
+    bend.outer.wss <- mean(bend.outer$WSS_mean, na.rm = TRUE)
+    bend.outer.wss.std <- sqrt(mean(bend.outer$WSS_var, na.rm = TRUE))
+    
+    postbend.wss <- mean(postbend.subset$WSS_mean, na.rm = TRUE)
+    postbend.wss.std <- sqrt(mean(postbend.subset$WSS_var, na.rm = TRUE))
+    postbend.inner.wss <- mean(postbend.inner$WSS_mean, na.rm = TRUE)
+    postbend.inner.wss.std <- sqrt(mean(postbend.inner$WSS_var, na.rm = TRUE))
+    postbend.outer.wss <- mean(postbend.outer$WSS_mean, na.rm = TRUE)
+    postbend.outer.wss.std <- sqrt(mean(postbend.outer$WSS_var, na.rm = TRUE))
+    
+    # Angle Calculations
+    prebend.angle <- mean(prebend.subset$Angle_mean, na.rm = TRUE)
+    prebend.std <- sqrt(mean(prebend.subset$Angle_var, na.rm = TRUE))
+    bend.angle <- mean(bend.subset$Angle_mean, na.rm = TRUE)
+    bend.std <- sqrt(mean(bend.subset$Angle_var, na.rm = TRUE))
+    postbend.angle <- mean(postbend.subset$Angle_mean, na.rm = TRUE)
+    postbend.std <- sqrt(mean(postbend.subset$Angle_var, na.rm = TRUE))
+    
+    # Compile data
+    DataFrame[i,] <- c(flow_rate, global.wss, global.wss.std, prebend.wss, prebend.wss.std, prebend.inner.wss, prebend.inner.wss.std, prebend.outer.wss, prebend.outer.wss.std, bend.wss, bend.wss.std, bend.inner.wss, bend.inner.wss.std, bend.outer.wss, bend.outer.wss.std, postbend.wss, postbend.wss.std, postbend.inner.wss, postbend.inner.wss.std, postbend.outer.wss, postbend.outer.wss.std, prebend.angle, prebend.std, bend.angle, bend.std, postbend.angle, postbend.std)
+  }
+  
+  DataFrame$Model <- ModelName
+  DataFrame <- as.data.frame(DataFrame)
+  return(DataFrame)
+}
+
+# Define function to calculate trendline statistics for global WSS values 
+calculate_trendline_stats <- function(...) {
+  combined_WSS_data <- bind_rows(...)
+  models <- unique(combined_WSS_data$Model)
+
+  trends <- data.frame(Model=character(), Slope=numeric(), Intercept=numeric(), R_squared=numeric(), stringsAsFactors=FALSE)
+  
+  for (model in models) {
+    working_data <- filter(combined_WSS_data, Model == model)
+    
+    lm_model <- lm(Global.Average.WSS ~ Flow.Rate, data=working_data)
+    trends <- rbind(trends, data.frame(
+      Model = model,
+      Slope = coef(lm_model)[2],
+      Intercept = coef(lm_model)[1],
+      R_squared = summary(lm_model)$r.squared
+    ))
+  }
+  return(trends)
+}
+
+# Define function to plot streamline angle v. flow rate, separated by region
+create_regional_angle_plot <- function(include_errorbar = FALSE, vertical = TRUE, ymin = 0, ylimit = 90, ...) {
+    # Combine input data frames into one
+    combined_angle_data <- do.call(rbind, list(...))
+    combined_angle_data <- as.data.frame(combined_angle_data)
+    
+    # Ensure 'Model' is a factor with the correct levels
+    model_levels <- names(model_colors)
+    combined_angle_data$Model <- factor(combined_angle_data$Model, levels = model_levels)
+    combined_angle_data <- droplevels(subset(combined_angle_data, !is.na(Model)))
+    
+    # Select colors from color palette for plotting
+    lookup_colors <- setNames(my_colors, model_levels)
+  
+    # Filter patient_parameters to only those matching the combined_angle_data
+    relevant_parameters <- patient_parameters[patient_parameters$Time_point %in% combined_angle_data$Model, ]
+    relevant_parameters$Model <- factor(relevant_parameters$Time_point, levels = model_levels)
+
+    margin_size = 0.15
+    ymin = ymin
+    h_just = 0.1
+    
+    # Prebend angle plot
+    prebend_angle_plot <- ggplot(combined_angle_data, aes(x = Flow.Rate, y = Prebend.Angle, color = Model)) +
+        geom_point(size = 3, shape = 16) +
+        scale_color_manual(values = lookup_colors) +
+        labs(title = "Prebend", x = "", y = "", color = "Model") +
+        theme(text = element_text(size = 14)) +
+        ylim(ymin, ylimit) + 
+        theme_cowplot() + 
+        theme(plot.title = element_text(size = 12, hjust = h_just, vjust = -8, face = "plain")) +
+        theme(plot.margin = unit(c(margin_size, margin_size, 0, margin_size), "cm")) + 
+        theme(panel.border = element_rect(color = "black", fill = NA, size = 1)) + 
+        coord_cartesian(clip = "off") +
+        annotation_ticks(sides = "bl", type = "minor", outside = TRUE)+ 
+        theme(legend.position = "bottom", legend.justification = "center", legend.box = "horizontal")
+  
+    # Bend angle plot
+    bend_angle_plot <- ggplot(combined_angle_data, aes(x = Flow.Rate, y = Bend.Angle, color = Model)) +
+        geom_point(size = 3, shape = 16) +
+        scale_color_manual(values = lookup_colors) + 
+        guides(shape = "none", color = "none") +
+        labs(title = "Bend", x = "", y = "", color = "Model") +
+        theme(text = element_text(size = 14)) +
+        ylim(ymin, ylimit) + 
+        theme_cowplot() + 
+        theme(plot.title = element_text(size = 12, hjust = h_just, vjust = -8, face = "plain")) +
+        theme(plot.margin = unit(c(margin_size, margin_size, 0, margin_size), "cm")) + 
+        theme(panel.border = element_rect(color = "black", fill = NA, size = 0.75))+ 
+        coord_cartesian(clip = "off") +
+        annotation_ticks(sides = "bl", type = "minor", outside = TRUE)+ 
+        theme(legend.position = "bottom", legend.justification = "center", legend.box = "horizontal")
+    
+    # Postbend angle plot
+    postbend_angle_plot <- ggplot(combined_angle_data, aes(x = Flow.Rate, y = Postbend.Angle, color = Model)) +
+        geom_point(size = 3, shape = 16) +
+        scale_color_manual(values = lookup_colors) + 
+        labs(title = "Postbend", x = "", y = "", color = "Model") +
+        guides(shape = guide_legend(title = "Wall"), color = guide_legend(title = "Model")) +
+        theme(text = element_text(size = 14), legend.position = "bottom") +
+        ylim(ymin, ylimit) + 
+        theme_cowplot() + 
+        theme(plot.title = element_text(size = 12, hjust = h_just, vjust = -8, face = "plain")) +
+        theme(plot.margin = unit(c(margin_size, margin_size, 0, margin_size), "cm")) + 
+        theme(panel.border = element_rect(color = "black", fill = NA, size = 1))+ 
+        coord_cartesian(clip = "off") +
+        annotation_ticks(sides = "bl", type = "minor", outside = TRUE) + 
+        theme(legend.position = "bottom", legend.justification = "center", legend.box = "horizontal")
+
+    # Add geom_errorbar if include_errorbar is TRUE
+    if (include_errorbar) {
+        prebend_angle_plot <- prebend_angle_plot +
+            geom_errorbar(aes(ymin = Prebend.Angle - Prebend.Angle.Std, ymax = Prebend.Angle + Prebend.Angle.Std), width = 5)
+        bend_angle_plot <- bend_angle_plot +
+            geom_errorbar(aes(ymin = Bend.Angle - Bend.Angle.Std, ymax = Bend.Angle + Bend.Angle.Std), width = 5)
+        postbend_angle_plot <- postbend_angle_plot +
+            geom_errorbar(aes(ymin = Postbend.Angle - Postbend.Angle.Std, ymax = Postbend.Angle + Postbend.Angle.Std), width = 5)
+    }
+
+    # Conditionally change orientation
+    if (vertical) {
+        prebend_angle_plot <- prebend_angle_plot + labs(title = "Prebend", x = "", y = "", color = "Model")
+        bend_angle_plot <- bend_angle_plot + labs(title = "Bend", x = "", y = "Streamline angle (\u00b0)", color = "Model")
+        postbend_angle_plot <- postbend_angle_plot + labs(title = "Postbend", x = "Flow Rate (mL/min)", y = "", color = "Model")
+        regional_angle_plot <- ggarrange(prebend_angle_plot, bend_angle_plot, postbend_angle_plot, nrow = 3, common.legend = TRUE, legend = "bottom")
+    } else {
+        prebend_angle_plot <- prebend_angle_plot + labs(title = "Prebend", x = "", y = "Streamline angle (\u00b0)", color = "Model")
+        bend_angle_plot <- bend_angle_plot + labs(title = "Bend", x = "Flow Rate (mL/min)", y = "", color = "Model")
+        postbend_angle_plot <- postbend_angle_plot + labs(title = "Postbend", x = "", y = "", color = "Model")
+        regional_angle_plot <- ggarrange(prebend_angle_plot, bend_angle_plot, postbend_angle_plot, ncol = 3, common.legend = TRUE, legend = "bottom")
+    }
+
+    return(regional_angle_plot)
+}
+
+
+# Define function to plot global WSS v. flow rate
+create_global_WSS_plot <- function(include_errorbar = FALSE, include_trendline = FALSE, ...) {
+    # Combine input data frames into one
+    combined_WSS_data = do.call(rbind, list(...))
+    
+    # Ensure 'Model' is a factor with the correct levels
+    model_levels <- names(model_colors)
+    combined_WSS_data$Model <- factor(combined_WSS_data$Model, levels = model_levels)
+  
+    # Select colors from color palette for plotting
+    lookup_colors <- setNames(my_colors, model_levels)
+    
+    # Create global WSS plot
+    global_WSS_plot <- ggplot() +
+        geom_point(data=combined_WSS_data, aes(x=Flow.Rate, y=Global.Average.WSS, color=Model), size=2.5, shape=16) + 
+        labs(title='',
+             x='Flow Rate (mL/min)',
+             y='Global Average WSS (mPa)',
+             color='Model') +
+        scale_color_manual(values = lookup_colors) + 
+        theme_cowplot() +
+        theme(text = element_text(size=12)) + 
+        theme(panel.border = element_rect(color = "black", fill = NA, size = 1)) + 
+        theme(legend.position = "bottom", legend.justification = "center")
+    
+    # Conditionally include error bars
+    if (include_errorbar) {
+        global_WSS_plot <- global_WSS_plot + geom_errorbar(data=combined_WSS_data, aes(x=Flow.Rate, ymin=(Global.Average.WSS - Global.Average.WSS.Std), ymax=(Global.Average.WSS + Global.Average.WSS.Std), color=Model, width=5))
+    }
+    # Conditionally include trendlines
+    if (include_trendline) {
+        global_WSS_plot <- global_WSS_plot + geom_smooth(data=combined_WSS_data, aes(x=Flow.Rate, y=Global.Average.WSS, color=Model), method = "lm", se=FALSE, linetype="dotted")
+    }
+    return(global_WSS_plot)
+}
+
+# Define function to sort angle data into bins
+calculate_bins <- function(dataframe) {
+  dataframe <- na.omit(dataframe)
+  result <- dataframe %>%
+    group_by(FlowRate, bin) %>%
+    summarise(n = n(), .groups = 'drop') %>%      
+    group_by(FlowRate) %>%
+    mutate(percentage = n / sum(n) * 100)
+  
+    all_bins <- c("0-5", "5-15", "15-25", "25-35", "35-45", ">45")
+    result$bin <- factor(result$bin, levels = rev(all_bins))
+    
+    result_ungrouped <- result %>%
+      ungroup() %>%
+      complete(FlowRate, bin, fill = list(percentage = 0))
+  
+  return(result_ungrouped)
+}
+
+# Define function to created stacked area angle plot
+created_stacked_area_angle_plot <- function(data, title, x_label = TRUE, y_label = TRUE) {
+  plot <- ggplot(data, aes(x = FlowRate, y = percentage, fill = bin)) +
+    geom_area(position = "stack", alpha = 0.6, colour = "black", size = 0.5) +
+    theme_cowplot() +
+    labs(title = title) +
+    guides(fill=guide_legend(title="Angle Bin")) + 
+    theme(plot.title = element_text(size = 12, hjust = 0.5, face = "bold"))
+  
+  if (y_label) {
+    plot <- plot + labs(y = "Percentage (%)")
+  } else {
+    plot <- plot + theme(axis.title.y = element_blank())
+  }
+  
+  if (x_label) {
+    plot <- plot + labs(x = "Flow Rate (mL/min)")
+  } else {
+    plot <- plot + theme(axis.title.x = element_blank())
+  }
+  
+  return(plot)
+}
+
+# Define function to identify ROIs that are consistently low WSS
+find_low_WSS_zones <- function(model_data, cutoff = 50) {
+  bottom_decile <- quantile(model_data$WSS_mean, probs = 0.1)
+  
+  model_data <- model_data %>%
+    mutate(Low_WSS = WSS_mean < bottom_decile) %>%
+    group_by(ModelName, Region, Wall, Position)
+  
+  result <- model_data %>%
+    group_by(ModelName, Region, Wall, Position) %>%
+    summarise(Pct_Bottom_Decile = mean(Low_WSS, na.rm = TRUE) * 100)
+  
+  result <- filter(result, Pct_Bottom_Decile >= cutoff)
+  
+  result$Pct_Bottom_Decile <- round(result$Pct_Bottom_Decile, 1)
+  
+  print(result)
+}
+```
+
+
+Read in Toy Model data:
+```{r Reading & Filtering Data}
+#Load in spreadsheet containing all toy model data
+file_path = "C:/your/file/path/toy_models_full_combined_summary.xlsx"
+toy_model_data = read_excel(file_path)
+
+
+# Stratify data by streamline angle
+toy_model_data <- toy_model_data %>%
+  mutate(bin = case_when(
+    Angle_mean <= 5 ~ "0-5",
+    Angle_mean > 5 & Angle_mean <= 15 ~ "5-15",
+    Angle_mean > 15 & Angle_mean <= 25 ~ "15-25",
+    Angle_mean > 25 & Angle_mean <= 35 ~ "25-35",
+    Angle_mean > 35 & Angle_mean <= 45 ~ "35-45",
+    Angle_mean > 45 ~ ">45",
+    TRUE ~ NA_character_
+  ))
+
+
+#Calculate variances for mean WSS and streamline angle for later calculations
+toy_model_data$WSS_var = (toy_model_data$WSS_std)^2
+toy_model_data$Angle_var = (toy_model_data$Angle_std)^2
+
+# Filter out rows with low wall coverage to remove poor quality data
+toy_model_data <- filter(toy_model_data, WallCoverage > 0.25)
+
+#Separate data by model
+toy_3mm_data = filter(toy_model_data, ModelName == "3mm_Toy")
+toy_6mm_data = filter(toy_model_data, ModelName == "6mm_Toy")
+toy_9mm_data = filter(toy_model_data, ModelName == "9mm_Toy")
+
+#Example to show data structure
+head(toy_3mm_data)
+
+# Calculate Model Statistics
+toy_3mm = calculate_model_stats("3mm", toy_3mm_data)
+toy_6mm = calculate_model_stats("6mm", toy_6mm_data)
+toy_9mm = calculate_model_stats("9mm", toy_9mm_data)
+```
+
+```{r Global WSS Plot - Toy Models}
+# Display trends data frame
+global_WSS_plot = create_global_WSS_plot(include_errorbar = TRUE, include_trendline = TRUE, toy_3mm, toy_6mm, toy_9mm)
+print(trends)
+global_WSS_plot
+ggsave(filename = "global_WSS_plot.png", plot=global_WSS_plot, bg="white", height = 2.95, width = 4, units = "in")
+
+# Extract slope, intercept, and R-squared
+trends = calculate_trendline_stats(toy_3mm, toy_6mm, toy_9mm)
+```
+
+```{r Regional Angle Plot - Toy Models}
+# Create regional angle plot for all three toy models
+toy_angle_plot = create_regional_angle_plot(include_errorbar = TRUE, vertical = TRUE, ymin = -7 ,ylimit = 40, toy_3mm, toy_6mm, toy_9mm)
+toy_angle_plot
+ggsave(filename = "toy_angle_plot.png", plot=toy_angle_plot, bg="white", height = 6.25, width = 4, units = "in")
+```
+
+Read in Patient Model data:
+```{r Load in Patient Model Data}
+#Load in spreadsheet containing all patient model data
+file_path = "C:/your/file/path/patient_models_combined_summary.xlsx"
+patient_model_data = read_excel(file_path)
+
+
+# Calculate add variance columns
+patient_model_data$WSS_var = (patient_model_data$WSS_std)^2
+patient_model_data$Angle_var = (patient_model_data$Angle_std)^2
+
+# Filter out rows with low wall coverage to remove poor quality data
+patient_model_data <- filter(patient_model_data, WallCoverage > 0.25)
+
+# Stratify data by streamline angle
+patient_model_data <- patient_model_data %>%
+  mutate(bin = case_when(
+    Angle_mean <= 5 ~ "0-5",
+    Angle_mean > 5 & Angle_mean <= 15 ~ "5-15",
+    Angle_mean > 15 & Angle_mean <= 25 ~ "15-25",
+    Angle_mean > 25 & Angle_mean <= 35 ~ "25-35",
+    Angle_mean > 35 & Angle_mean <= 45 ~ "35-45",
+    Angle_mean > 45 ~ ">45",
+    TRUE ~ NA_character_
+  ))
+
+
+# Filter
+P104_3mo_data = filter(patient_model_data, ModelName == "P104_3mo")
+P104_12mo_data = filter(patient_model_data, ModelName == "P104_12mo")
+P96_3mo_data = filter(patient_model_data, ModelName == "P96_3mo")
+P96_12mo_data = filter(patient_model_data, ModelName == "P96_12mo")
+P93_3mo_data = filter(patient_model_data, ModelName == "P93_3mo")
+P93_12mo_data = filter(patient_model_data, ModelName == "P93_12mo")
+P98_3mo_data = filter(patient_model_data, ModelName == "P98_3mo")
+P98_12mo_data = filter(patient_model_data, ModelName == "P98_12mo")
+
+# Add 'ModelName' Column
+P104_12mo_data$ModelName = "P104 12mo"
+P104_3mo_data$ModelName = "P104 3mo"
+P96_12mo_data$ModelName = "P96 12mo"
+P96_3mo_data$ModelName = "P96 3mo"
+P93_12mo_data$ModelName = "P93 12mo"
+P93_3mo_data$ModelName = "P93 3mo"
+P98_12mo_data$ModelName = "P98 12mo"
+P98_3mo_data$ModelName = "P98 3mo"
+toy_3mm_data$ModelName = "3mm"
+toy_6mm_data$ModelName = "6mm"
+toy_9mm_data$ModelName = "9mm"
+
+# Process patient data
+P104_3mo = calculate_model_stats("P104 3mo", P104_3mo_data)
+P104_12mo = calculate_model_stats("P104 12mo", P104_12mo_data)
+P96_3mo = calculate_model_stats("P96 3mo", P96_3mo_data)
+P96_12mo = calculate_model_stats("P96 12mo", P96_12mo_data)
+P93_3mo = calculate_model_stats("P93 3mo", P93_3mo_data)
+P93_12mo = calculate_model_stats("P93 12mo", P93_12mo_data)
+P98_3mo = calculate_model_stats("P98 3mo", P98_3mo_data)
+P98_12mo = calculate_model_stats("P98 12mo", P98_12mo_data)
+```
+
+```{r Patient Global WSS Plots}
+P104_global_WSS <- create_global_WSS_plot(include_errorbar = TRUE, include_trendline = TRUE, P104_12mo, P104_3mo)
+ggsave(filename = "P104_global_WSS_plot.png", plot=P104_global_WSS, bg="white", height = 4, width = 4.75, units = "in")
+
+P96_global_WSS <- create_global_WSS_plot(include_errorbar = TRUE, include_trendline = TRUE, P96_3mo,P96_12mo, toy_6mm)
+ggsave(filename = "P96_global_WSS_plot.png", plot=P96_global_WSS, bg="white", height = 3, width = 4.75, units = "in")
+
+P98_global_WSS <- create_global_WSS_plot(include_errorbar = TRUE, include_trendline = TRUE, P98_3mo,P98_12mo)
+ggsave(filename = "P98_global_WSS_plot.png", plot=P98_global_WSS, bg="white", height = 4, width = 4.75, units = "in")
+
+P93_global_WSS <- create_global_WSS_plot(include_errorbar = TRUE, include_trendline = TRUE, P93_3mo,P93_12mo)
+ggsave(filename = "P93_global_WSS_plot.png", plot=P93_global_WSS, bg="white", height = 4, width = 4.75, units = "in")
+
+# Extract slope, intercept, and R-squared
+calculate_trendline_stats(P104_3mo, P104_12mo, P96_3mo, P96_12mo, P93_3mo, P93_12mo, P98_3mo, P98_12mo)
+```
+
+```{r Patient Regional Angle Plots}
+P104_regional_angles <- create_regional_angle_plot(ymin = -6, ylimit = 70, include_errorbar = TRUE, vertical = FALSE,include_vlines = FALSE, P104_3mo, P104_12mo)
+ggsave(filename = "P104_regional_angles.png", plot = last_plot(), bg="white", height = 4, width = 9, units = "in")
+
+P96_regional_angles <- create_regional_angle_plot(ymin = -6, ylimit = 55, include_errorbar = TRUE, vertical = TRUE,include_vlines = FALSE, P96_3mo, P96_12mo, toy_6mm)
+save_plot(filename = "P96_regional_angles.png", plot = last_plot(), bg="white", base_height = 6.5, base_width = 3.75, units = "in")
+
+P98_regional_angles <- create_regional_angle_plot(ymin = -7, ylimit = 60, include_errorbar = TRUE, vertical = FALSE,include_vlines = FALSE, P98_3mo, P98_12mo)
+ggsave(filename = "P98_regional_angles.png", plot = last_plot(), bg="white", height = 4, width = 9, units = "in")
+
+P93_regional_angles <- create_regional_angle_plot(ymin = -5, ylimit = 55, include_errorbar = TRUE, vertical = FALSE,include_vlines = FALSE, P93_3mo, P93_12mo)
+ggsave(filename = "P93_regional_angles.png", plot = last_plot(), bg="white", height = 4, width = 9, units = "in")
+```
+
+```{r Calculating Bins for All Models}
+P93_3mo_bins <- calculate_bins(P93_3mo_data)
+P93_12mo_bins <- calculate_bins(P93_12mo_data)
+P96_3mo_bins <- calculate_bins(P96_3mo_data)
+P96_12mo_bins <- calculate_bins(P96_12mo_data)
+P98_3mo_bins <- calculate_bins(P98_3mo_data)
+P98_12mo_bins <- calculate_bins(P98_12mo_data)
+P104_3mo_bins <- calculate_bins(P104_3mo_data)
+P104_12mo_bins <- calculate_bins(P104_12mo_data)
+
+toy_3mm_bins <- calculate_bins(toy_3mm_data)
+toy_6mm_bins <- calculate_bins(toy_6mm_data)
+toy_9mm_bins <- calculate_bins(toy_9mm_data)
+```
+
+```{r Creating Stacked Area Plots}
+P93_3mo_stacked <- created_stacked_area_angle_plot(P93_3mo_bins, title = "P93 3mo", y_label = TRUE)
+ggsave(filename = "P93_3mo_stacked_angles.png", plot=last_plot(), bg="white", height = 4.29, width = 5, units = "in")
+
+P93_12mo_stacked <- created_stacked_area_angle_plot(P93_12mo_bins, title = "P93 12mo", y_label = TRUE)
+ggsave(filename = "P93_12mo_stacked_angles.png", plot=last_plot(), bg="white", height = 4.29, width = 5, units = "in")
+
+P96_3mo_stacked <- created_stacked_area_angle_plot(P96_3mo_bins, title = "P96 3mo", y_label = FALSE)
+P96_12mo_stacked <- created_stacked_area_angle_plot(P96_12mo_bins, title = "P96 12mo", y_label = FALSE, x_label = FALSE)
+
+P98_3mo_stacked <- created_stacked_area_angle_plot(P98_3mo_bins, title = "P98 3mo", y_label = TRUE)
+ggsave(filename = "P98_3mo_stacked_angles.png", plot=last_plot(), bg="white", height = 4.29, width = 5, units = "in")
+
+P98_12mo_stacked <- created_stacked_area_angle_plot(P98_12mo_bins, title = "P98 12mo", y_label = TRUE)
+ggsave(filename = "P98_12mo_stacked_angles.png", plot=last_plot(), bg="white", height = 4.29, width = 5, units = "in")
+
+P104_3mo_stacked <- created_stacked_area_angle_plot(P104_3mo_bins, title = "P104 3mo", y_label = TRUE)
+ggsave(filename = "P104_3mo_stacked_angles.png", plot=last_plot(), bg="white", height = 4.29, width = 5, units = "in")
+P104_12mo_stacked <- created_stacked_area_angle_plot(P104_12mo_bins, title = "P104 12mo", y_label = TRUE)
+ggsave(filename = "P104_12mo_stacked_angles.png", plot=last_plot(), bg="white", height = 4.29, width = 5, units = "in")
+
+
+
+P93_stacked <- ggarrange(P93_3mo_stacked, P93_12mo_stacked, ncol = 2, common.legend = TRUE, legend = "right")
+ggsave(filename = "P93_stacked_angles.png", plot=last_plot(), bg="white", height = 4, width = 7.5, units = "in")
+
+P96_stacked <- ggarrange(P96_3mo_stacked, P96_12mo_stacked, common.legend = TRUE, legend = "right")
+ggsave(filename = "P96_stacked_angles.png", plot=last_plot(), bg="white", height = 4, width = 7.5, units = "in")
+
+P98_stacked <- ggarrange(P98_3mo_stacked, P98_12mo_stacked, ncol = 2, common.legend = TRUE, legend = "right")
+ggsave(filename = "P98_stacked_angles.png", plot=last_plot(), bg="white", height = 4, width = 7.5, units = "in")
+
+P104_stacked <- ggarrange(P104_3mo_stacked, P104_12mo_stacked, ncol = 2, common.legend = TRUE, legend = "right")
+ggsave(filename = "P104_stacked_angles.png", plot=last_plot(), bg="white", height = 4, width = 7.5, units = "in")
+
+toy_3mm_stacked <- created_stacked_area_angle_plot(toy_3mm_bins, title = "3 mm Toy", y_label = TRUE)
+toy_3mm_stacked <- toy_3mm_stacked + theme(legend.position = "none")
+ggsave(filename = "toy_3mm_stacked.png", plot=last_plot(), bg="white", height = 4, width = 4, units = "in")
+
+toy_6mm_stacked <- created_stacked_area_angle_plot(toy_6mm_bins, title = "6 mm Toy", y_label = TRUE, x_label = FALSE)
+ggsave(filename = "toy_6mm_stacked.png", plot=last_plot(), bg="white", height = 4, width = 4, units = "in")
+
+toy_9mm_stacked <- created_stacked_area_angle_plot(toy_9mm_bins, title = "9 mm Toy", y_label = FALSE)
+ggsave(filename = "toy_9mm_stacked.png", plot=last_plot(), bg="white", height = 4, width = 4, units = "in")
+
+fig3_stacked_plot <- ggarrange(toy_6mm_stacked, P96_3mo_stacked, P96_12mo_stacked, ncol = 3, common.legend = TRUE, legend = "right", align = "h")
+ggsave(filename = "fig3_stacked_plot.png", plot=last_plot(), bg="white", height = 3.2, width = 9.83, units = "in")
+
+
+fig2_stacked_plot <- ggarrange(toy_3mm_stacked, toy_9mm_stacked, ncol = 2, common.legend = TRUE, legend = "right", align = "h")
+ggsave(filename = "fig2_stacked_plot.png", plot=last_plot(), bg="white", height = 2.5, width = 11, units = "in")
+```
+
+```{r Identifying Consistently Low WSS Zones}
+find_low_WSS_zones(P93_3mo_data)
+find_low_WSS_zones(P93_12mo_data)
+find_low_WSS_zones(P96_3mo_data)
+find_low_WSS_zones(P96_12mo_data)
+find_low_WSS_zones(P98_3mo_data)
+find_low_WSS_zones(P98_12mo_data)
+find_low_WSS_zones(P104_3mo_data)
+find_low_WSS_zones(P104_12mo_data)
+
+find_low_WSS_zones(toy_3mm_data)
+find_low_WSS_zones(toy_6mm_data)
+find_low_WSS_zones(toy_9mm_data)
+```
